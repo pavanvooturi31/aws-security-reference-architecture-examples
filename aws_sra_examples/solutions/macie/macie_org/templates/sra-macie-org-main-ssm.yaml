@@ -55,6 +55,11 @@ Metadata:
           - pLambdaLogGroupKmsKey
           - pLambdaLogLevel
 
+      - Label:
+          default: EventBridge Rule Properties
+        Parameters:
+          - pComplianceFrequency
+
     ParameterLabels:
       pStackSetAdminRole:
         default: Stack Set Role
@@ -62,6 +67,8 @@ Metadata:
         default: Stack execution role
       pAuditAccountId:
         default: Audit Account ID
+      pComplianceFrequency:
+        default: Frequency to Check for Organizational Compliance
       pControlTowerRegionsOnly:
         default: Control Tower Regions Only
       pCreateLambdaLogGroup:
@@ -98,6 +105,13 @@ Metadata:
         default: SRA Staging S3 Bucket Name
 
 Parameters:
+  pComplianceFrequency:
+    ConstraintDescription: Compliance Frequency must be a number between 1 and 30, inclusive.
+    Default: 7
+    Description: Frequency (in days between 1 and 30, default is 7) to check organizational compliance by invoking the Lambda Function.
+    MinValue: 1
+    MaxValue: 30
+    Type: Number
   pStackSetAdminRole:
     AllowedValues: [sra-stackset]
     Default: sra-stackset
@@ -381,6 +395,7 @@ Resources:
     Properties:
       TemplateURL: !Sub https://${pSRAStagingS3BucketName}.s3.${AWS::Region}.${AWS::URLSuffix}/${pSRASolutionName}/templates/sra-macie-org-configuration.yaml
       Parameters:
+        pComplianceFrequency: !Ref pComplianceFrequency
         pControlTowerRegionsOnly: !Ref pControlTowerRegionsOnly
         pCreateLambdaLogGroup: !Ref pCreateLambdaLogGroup
         pDelegatedAdminAccountId: !Ref pAuditAccountId

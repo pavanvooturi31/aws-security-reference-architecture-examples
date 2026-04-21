@@ -47,7 +47,14 @@ Metadata:
           - pLambdaLogGroupKmsKey
           - pLambdaLogLevel
 
+      - Label:
+          default: EventBridge Rule Properties
+        Parameters:
+          - pComplianceFrequency
+
     ParameterLabels:
+      pComplianceFrequency:
+        default: Frequency to Check for Organizational Compliance
       pControlTowerRegionsOnly:
         default: Control Tower Regions Only
       pCreateLambdaLogGroup:
@@ -88,6 +95,13 @@ Metadata:
         default: SRA Staging S3 Bucket Name
 
 Parameters:
+  pComplianceFrequency:
+    ConstraintDescription: Compliance Frequency must be a number between 1 and 30, inclusive.
+    Default: 7
+    Description: Frequency (in days between 1 and 30, default is 7) to check organizational compliance by invoking the Lambda Function.
+    MinValue: 1
+    MaxValue: 30
+    Type: Number
   pControlTowerRegionsOnly:
     Type: String
     Description: Only enable in the Control Tower governed regions
@@ -199,6 +213,7 @@ Parameters:
     Type: String
 
 Conditions:
+  cComplianceFrequencySingleDay: !Equals [!Ref pComplianceFrequency, 1]
   cUseKmsKey: !Not [!Equals [!Ref pLambdaLogGroupKmsKey, '']]
   cCreateLambdaLogGroup: !Equals [!Ref pCreateLambdaLogGroup, 'true']
   cCreateDLQAlarm: !Not [!Equals [!Ref pSRAAlarmEmail, '']]
@@ -429,6 +444,17 @@ Resources:
       Environment:
         Variables:
           LOG_LEVEL: !Ref pLambdaLogLevel
+          CONFIGURATION_ROLE_NAME: !Ref pMacieOrgConfigurationRoleName
+          CONTROL_TOWER_REGIONS_ONLY: !Ref pControlTowerRegionsOnly
+          DELEGATED_ADMIN_ACCOUNT_ID: !Ref pDelegatedAdminAccountId
+          DISABLE_MACIE: !Ref pDisableMacie
+          DISABLE_MACIE_ROLE_NAME: !Ref pDisableMacieRoleName
+          ENABLED_REGIONS: !Ref pEnabledRegions
+          FINDING_PUBLISHING_FREQUENCY: !Ref pFindingPublishingFrequency
+          KMS_KEY_ARN: !Ref pKMSKeyArn
+          MANAGEMENT_ACCOUNT_ID: !Ref AWS::AccountId
+          PUBLISHING_DESTINATION_BUCKET_NAME: !Ref pPublishingDestinationBucketName
+          SNS_TOPIC_ARN: !Ref rMacieOrgTopic
       Tags:
         - Key: sra-solution
           Value: !Ref pSRASolutionName
@@ -534,6 +560,28 @@ Resources:
         - !Ref rMacieOrgDLQAlarmTopic
       InsufficientDataActions:
         - !Ref rMacieOrgDLQAlarmTopic
+
+  rPermissionForScheduledComplianceRuleToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt rMacieOrgLambdaFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt rScheduledComplianceRule.Arn
+
+  rScheduledComplianceRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub ${pSRASolutionName}-organization-compliance
+      Description: SRA Macie Trigger for scheduled organization compliance
+      ScheduleExpression: !If
+        - cComplianceFrequencySingleDay
+        - !Sub rate(${pComplianceFrequency} day)
+        - !Sub rate(${pComplianceFrequency} days)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt rMacieOrgLambdaFunction.Arn
+          Id: !Ref pMacieOrgLambdaFunctionName
 
 Outputs:
   oMacieOrgLambdaFunctionArn:

@@ -166,6 +166,77 @@ def process_sns_records(records: list) -> None:
             macie.disable_member_account(message["AccountId"], message["DisableMacieRoleName"], message["Regions"])
 
 
+def get_validated_parameters_from_env() -> dict:
+    """Validate Lambda Function Environment Variables for scheduled event processing.
+
+    Returns:
+        Validated parameters
+    """
+    params: dict = {}
+    params["action"] = "Update"
+
+    parameter_pattern_validator("CONFIGURATION_ROLE_NAME", os.environ.get("CONFIGURATION_ROLE_NAME", ""), pattern=r"^[\w+=,.@-]{1,64}$")
+    params["CONFIGURATION_ROLE_NAME"] = os.environ.get("CONFIGURATION_ROLE_NAME", "")
+
+    parameter_pattern_validator("CONTROL_TOWER_REGIONS_ONLY", os.environ.get("CONTROL_TOWER_REGIONS_ONLY", ""), pattern=r"^true|false$")
+    params["CONTROL_TOWER_REGIONS_ONLY"] = os.environ.get("CONTROL_TOWER_REGIONS_ONLY", "")
+
+    parameter_pattern_validator("DELEGATED_ADMIN_ACCOUNT_ID", os.environ.get("DELEGATED_ADMIN_ACCOUNT_ID", ""), pattern=r"^\d{12}$")
+    params["DELEGATED_ADMIN_ACCOUNT_ID"] = os.environ.get("DELEGATED_ADMIN_ACCOUNT_ID", "")
+
+    parameter_pattern_validator("DISABLE_MACIE", os.environ.get("DISABLE_MACIE", ""), pattern=r"^true|false$")
+    params["DISABLE_MACIE"] = os.environ.get("DISABLE_MACIE", "")
+
+    parameter_pattern_validator("DISABLE_MACIE_ROLE_NAME", os.environ.get("DISABLE_MACIE_ROLE_NAME", ""), pattern=r"^[\w+=,.@-]{1,64}$")
+    params["DISABLE_MACIE_ROLE_NAME"] = os.environ.get("DISABLE_MACIE_ROLE_NAME", "")
+
+    parameter_pattern_validator("ENABLED_REGIONS", os.environ.get("ENABLED_REGIONS", ""), pattern=r"^$|[a-z0-9-, ]+$")
+    params["ENABLED_REGIONS"] = os.environ.get("ENABLED_REGIONS", "")
+
+    parameter_pattern_validator(
+        "FINDING_PUBLISHING_FREQUENCY", os.environ.get("FINDING_PUBLISHING_FREQUENCY", ""), pattern=r"^FIFTEEN_MINUTES|ONE_HOUR|SIX_HOURS$"
+    )
+    params["FINDING_PUBLISHING_FREQUENCY"] = os.environ.get("FINDING_PUBLISHING_FREQUENCY", "")
+
+    parameter_pattern_validator(
+        "KMS_KEY_ARN",
+        os.environ.get("KMS_KEY_ARN", ""),
+        pattern=r"^arn:(aws[a-zA-Z-]*){1}:kms:[a-z0-9-]+:\d{12}:key\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+    )
+    params["KMS_KEY_ARN"] = os.environ.get("KMS_KEY_ARN", "")
+
+    parameter_pattern_validator(
+        "PUBLISHING_DESTINATION_BUCKET_NAME",
+        os.environ.get("PUBLISHING_DESTINATION_BUCKET_NAME", ""),
+        pattern=r"^[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$",
+    )
+    params["PUBLISHING_DESTINATION_BUCKET_NAME"] = os.environ.get("PUBLISHING_DESTINATION_BUCKET_NAME", "")
+
+    parameter_pattern_validator(
+        "SNS_TOPIC_ARN",
+        os.environ.get("SNS_TOPIC_ARN", ""),
+        pattern=r"^arn:(aws[a-zA-Z-]*){1}:sns:[a-z0-9-]+:\d{12}:[0-9a-zA-Z]+([0-9a-zA-Z-]*[0-9a-zA-Z])*$",
+    )
+    params["SNS_TOPIC_ARN"] = os.environ.get("SNS_TOPIC_ARN", "")
+
+    parameter_pattern_validator("MANAGEMENT_ACCOUNT_ID", os.environ.get("MANAGEMENT_ACCOUNT_ID", ""), pattern=r"^\d{12}$")
+    params["MANAGEMENT_ACCOUNT_ID"] = os.environ.get("MANAGEMENT_ACCOUNT_ID", "")
+
+    return params
+
+
+def process_event(event: dict) -> None:  # noqa: U100
+    """Process scheduled event for organizational compliance.
+
+    Args:
+        event: event data
+    """
+    LOGGER.info("Processing scheduled compliance event")
+    params = get_validated_parameters_from_env()
+    regions = common.get_enabled_regions(params.get("ENABLED_REGIONS", ""), (params.get("CONTROL_TOWER_REGIONS_ONLY", "false")).lower() in "true")
+    process_create_update_event(params, regions)
+
+
 @helper.create
 @helper.update
 @helper.delete
@@ -207,14 +278,12 @@ def lambda_handler(event: Dict[str, Any], context: Context) -> None:  # noqa: U1
     """
     LOGGER.info("....Lambda Handler Started....")
     try:
-        if "Records" not in event and "RequestType" not in event and ("source" not in event and event["source"] != "aws.controltower"):
-            raise ValueError(
-                f"The event did not include Records, RequestType, or source. Review CloudWatch logs '{context.log_group_name}' for details."
-            ) from None
-        elif "Records" in event and event["Records"][0]["EventSource"] == "aws:sns":
-            process_sns_records(event["Records"])
-        elif "RequestType" in event:
+        if event.get("RequestType"):
             helper(event, context)
+        elif event.get("Records") and event["Records"][0]["EventSource"] == "aws:sns":
+            process_sns_records(event["Records"])
+        else:
+            process_event(event)
     except Exception:
         LOGGER.exception(UNEXPECTED)
         raise ValueError(f"Unexpected error executing Lambda function. Review CloudWatch logs '{context.log_group_name}' for details.") from None
@@ -232,14 +301,12 @@ def terraform_handler(event: Dict[str, Any], context: Context) -> None:  # noqa:
     """
     LOGGER.info("....Terraform Lambda Handler Started....")
     try:
-        if "Records" not in event and "RequestType" not in event and ("source" not in event and event["source"] != "aws.controltower"):
-            raise ValueError(
-                f"The event did not include Records, RequestType, or source. Review CloudWatch logs '{context.log_group_name}' for details."
-            ) from None
-        elif "Records" in event and event["Records"][0]["EventSource"] == "aws:sns":
-            process_sns_records(event["Records"])
-        elif "RequestType" in event:
+        if event.get("RequestType"):
             process_cloudformation_event(event, context)
+        elif event.get("Records") and event["Records"][0]["EventSource"] == "aws:sns":
+            process_sns_records(event["Records"])
+        else:
+            process_event(event)
     except Exception:
         LOGGER.exception(UNEXPECTED)
         raise ValueError(f"Unexpected error executing Lambda function. Review CloudWatch logs '{context.log_group_name}' for details.") from None
